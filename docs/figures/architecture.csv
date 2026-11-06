@@ -1,0 +1,28 @@
+layer,type,output,parameters
+sequence,InputLayer,"(None, 147, 4)",0
+physics,InputLayer,"(None, 143, 9)",0
+motifs_7,GroupedJointMotifs,"(None, 141, 64)",3525
+motifs_11,GroupedJointMotifs,"(None, 137, 48)",3413
+motifs_15,GroupedJointMotifs,"(None, 133, 32)",2789
+motifs_21,GroupedJointMotifs,"(None, 127, 24)",2669
+kmers,InputLayer,"(None, 340)",0
+dyad_pool_7,DyadPool,"(None, 576)",0
+dyad_pool_11,DyadPool,"(None, 432)",0
+dyad_pool_15,DyadPool,"(None, 288)",0
+dyad_pool_21,DyadPool,"(None, 216)",0
+composition_embedding,Dense,"(None, 32)",10912
+all_features,Concatenate,"(None, 1544)",0
+motif_statistics,MotifStatistics,"(None, 800)",0
+feature_normalization,BatchNormalization,"(None, 1544)",6176
+statistics_normalization,Normalization,"(None, 800)",1601
+dropout,Dropout,"(None, 1544)",0
+statistics_by_word,StatisticsByWord,"(None, 80, 10)",0
+joint_embedding,Dense,"(None, 64)",98880
+shared_statistic_encoder,Dense,"(None, 80, 4)",44
+dropout_1,Dropout,"(None, 64)",0
+statistics_dropout,Dropout,"(None, 80, 4)",0
+joint_logit,Dense,"(None, 1)",65
+word_features,Flatten,"(None, 320)",0
+physical_adapter,Functional,"(None, 1)",4046
+statistics_readout,Dense,"(None, 1)",321
+statistics_correction,BoundedCorrection,"(None, 1)",1

@@ -1,0 +1,7 @@
+step,text
+data,Dataset 12 benchmark units 147-bp sequences + 14 shape tracks
+split,"Outer k-fold (k = 5 or 10) stratified, seed 42 RC-identical sequences stay in one fold"
+roles,Per fold test = 1/k (never trained on) tune = 10 % of the rest fit = the other 90 %
+prep,"Fit rows only k-mer z-scores, shape z-scores + PLS, motif prototypes, statistics norm"
+base,Base run SAM (ρ 0.05) + AdamW ≤ 120 epochs; best EMA tune log loss → epoch e*
+refit,"Refit (reported) fit + tune rows e* epochs, base learning rates replayed"
