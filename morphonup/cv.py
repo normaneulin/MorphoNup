@@ -13,6 +13,7 @@ A stage with fold_summary.json is complete and skipped, so a killed job resumes 
 Figures (morphonup.figures) are drawn after every fold, every pooled seed and every seed summary; the arm
 comparisons (morphonup.analysis) are refreshed whenever a seed of any arm finishes.
 """
+import fcntl
 import hashlib
 import json
 import time
@@ -46,9 +47,9 @@ def run_dir(dataset_id, k, arm="full", root=None):
     return (root or config.RESULTS_ROOT) / dataset_id / f"k{k}" / arm
 
 
-def fold_inputs(ds, X, fit, shape_spec):
+def fold_inputs(ds, X, fit, shape_spec, strand_flag=False):
     """Preprocessing fitted on `fit` rows only; returns the reducer and both strands' input views."""
-    kmers = kmer_views(ds, fit)
+    kmers = kmer_views(ds, fit, strand_flag)
     reducer = PhysicalReducer.from_spec(shape_spec)
     reducer.fit(X[0][fit], ds.y[fit], X[1][fit])
     phys = [reducer.transform(X[s]) for s in (0, 1)]
@@ -72,7 +73,7 @@ def train_stage(ds, X, part, cfg, shape_spec, seed, folder, stage):
         replay = pd.read_csv(base / "history.csv")["learning_rate_used"].to_numpy()[:epochs]
         fit = np.sort(np.concatenate([fit, tune]))
         part = dict(part, fit=fit)
-    reducer, views = fold_inputs(ds, X, fit, shape_spec)
+    reducer, views = fold_inputs(ds, X, fit, shape_spec, cfg.get("strand_flag", False))
     np.savez_compressed(folder / "preprocessor.npz", **reducer.state())
     (a, b, y), (va, vb, vy), (ta, tb, ty) = views(fit), views(tune), views(test)
     assert a["kmers"].shape[1] == cfg["kmer_dim"]
@@ -166,7 +167,7 @@ def write_run_config(base_dir, ds, dataset_id, k, arm, cfg, shape_spec, parts):
 SMOKE = dict(epochs=2, warmup_epochs=1, select_start_epoch=1)   # pipeline check only, never research numbers
 
 
-def run(ds, dataset_id, k, seeds, folds=None, arm="full", root=None, smoke=False, log=print):
+def run(ds, dataset_id, k, seeds, folds=None, arm="full", root=None, smoke=False, log=print, stages=STAGES):
     cfg, shape_spec = arms.resolve(arm)
     if smoke:
         if root is None or root.resolve() == config.RESULTS_ROOT.resolve():
@@ -182,7 +183,7 @@ def run(ds, dataset_id, k, seeds, folds=None, arm="full", root=None, smoke=False
         for part in parts:
             if folds and part["fold"] not in folds:
                 continue
-            for stage in STAGES:
+            for stage in stages:                         # "refit" alone needs the finished base stage
                 folder = seed_dir / f"fold_{part['fold']:02d}" / stage
                 if (folder / "fold_summary.json").exists():
                     log(f"skip {dataset_id} k{k} {arm} seed {seed} fold {part['fold']} {stage}")
@@ -204,5 +205,9 @@ def run(ds, dataset_id, k, seeds, folds=None, arm="full", root=None, smoke=False
             draw(figures.summary_figures, base_dir, log=log)
             draw(analysis.refresh, base_dir.parent, log=log)
             if arm == "full":
-                draw(figures.benchmark_figures, root or config.RESULTS_ROOT, log=log)
+                bench = (root or config.RESULTS_ROOT) / "benchmark"
+                bench.mkdir(parents=True, exist_ok=True)
+                with open(bench / ".lock", "w") as lock:      # parallel dataset jobs may finish a seed together
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    draw(figures.benchmark_figures, root or config.RESULTS_ROOT, log=log)
     return results

@@ -44,15 +44,45 @@ from scipy import stats
 from . import arms
 from .analysis import _write_table
 from .cv import fold_inputs, outer_parts
-from .figures import BLUE, INK, INK2, MUTED, ORANGE, Writer, style
+from .figures import INK, INK2, MUTED, Writer, style
 from .network import build_core
 from .training import build_model, predict_views
 
-DIVERGING = LinearSegmentedColormap.from_list("diverging", ["#1c5cab", "#86b6ef", "#f0efec", "#ef9a99", "#b8302f"])
-CLASS = {1: ("Nucleosome", BLUE), 0: ("Linker", ORANGE)}
+
+
+def _lch_to_rgb(l, c, h):
+    """CIE LCh (D65) to sRGB in [0, 1], as skimage.color.lab2rgb, which the shap package uses for its colours."""
+    a, b = c * np.cos(h), c * np.sin(h)
+    fy = (l + 16) / 116
+    finv = lambda t: t ** 3 if t > 6 / 29 else 3 * (6 / 29) ** 2 * (t - 4 / 29)   # noqa: E731
+    xyz = np.array([0.95047 * finv(fy + a / 500), finv(fy), 1.08883 * finv(fy - b / 200)])
+    lin = np.array([[3.2404542, -1.5371385, -0.4985314], [-0.9692660, 1.8760108, 0.0415560],
+                    [0.0556434, -0.2040259, 1.0572252]]) @ xyz
+    return np.clip(np.where(lin <= 0.0031308, 12.92 * lin, 1.055 * np.clip(lin, 0, None) ** (1 / 2.4) - 0.055), 0, 1)
+
+
+def _shap_red_blue():
+    """The shap package's default colour scale (shap.plots.colors.red_blue): blue to pink through purple in LCh space,
+    rebuilt here so the shap package is not needed. Its ends are shap's blue #008bfb and pink #ff0051."""
+    blue, mid, red = (54., 70., 4.6588), 40., (54., 90., 0.35470565 + 2 * np.pi)
+    l = np.r_[np.linspace(blue[0], mid, 50), np.linspace(mid, red[0], 50)]
+    colors = [_lch_to_rgb(li, c, h) for li, c, h in zip(l, np.linspace(blue[1], red[1], 100), np.linspace(blue[2], red[2], 100))]
+    colors[0], colors[-1] = SHAP_BLUE, SHAP_PINK
+    return LinearSegmentedColormap.from_list("shap_red_blue", colors)
+
+
+# SHAP figures use the shap package's colours: blue for low values and pushes toward linker, pink for high values and
+# pushes toward nucleosome. The class colours follow: nucleosome pink, linker blue.
+SHAP_BLUE, SHAP_PINK = "#008bfb", "#ff0051"
+SHAP_LIGHT_BLUE, SHAP_LIGHT_PINK = "#80c5fd", "#ff80a8"
+DIVERGING = _shap_red_blue()
+SEQUENTIAL = LinearSegmentedColormap.from_list("shap_sequential", ["#ffffff", SHAP_BLUE])
+SIGNED = LinearSegmentedColormap.from_list("shap_signed", [SHAP_BLUE, "#ffffff", SHAP_PINK])   # signed weights, white at 0
+CLASS = {1: ("Nucleosome", SHAP_PINK), 0: ("Linker", SHAP_BLUE)}
 LEVELS = ("modality", "tracks", "channels")
 LEVEL_TITLE = dict(modality="Input modality", tracks="Shape tracks (PLS block as one)", channels="Shape channels")
-OUTCOMES = [("TP", 1, True, BLUE), ("FN", 1, False, "#86b6ef"), ("TN", 0, False, ORANGE), ("FP", 0, True, "#f4b393")]
+OUTCOMES = [("TP", 1, True, SHAP_PINK), ("FN", 1, False, SHAP_LIGHT_PINK), ("TN", 0, False, SHAP_BLUE),
+            ("FP", 0, True, SHAP_LIGHT_BLUE)]
 META = ["index", "fold", "label", "probability", "base_value"]
 
 
@@ -63,7 +93,7 @@ def load_fold(ds, X, arm_dir, part, seed, stage="refit"):
     arm_dir = Path(arm_dir)
     cfg, shape = arms.resolve(arm_dir.name)
     fit = part["fit"] if stage == "base" else np.sort(np.concatenate([part["fit"], part["tune"]]))
-    reducer, views = fold_inputs(ds, X, fit, shape)
+    reducer, views = fold_inputs(ds, X, fit, shape, cfg.get("strand_flag", False))
     tf.keras.backend.clear_session()
     core = build_core(cfg, reducer.channels, reducer.groups())
     model = build_model(cfg, core)
@@ -115,13 +145,27 @@ def levels(channel_names):
 
 # ---------------------------------------------------------------- exact group Shapley values
 
-def coalition_values(core, cfg, targets, background, players, batch=4096):
-    """v(S) for every coalition S of the players: (2^n, T) mean reported probability over the background."""
+def coalition_values(core, cfg, targets, background, players, batch=1024):
+    """v(S) for every coalition S of the players: (2^n, T) mean reported probability over the background.
+    `batch` rows go through the network at once; it is halved automatically if the GPU runs out of memory (the batch
+    size does not change the values)."""
     names = list(players)
     n, T, B = len(names), len(targets[0]["sequence"]), len(background[0]["sequence"])
     if n > 12:
         raise ValueError(f"{n} players need 2^{n} coalitions")
     call = tf.function(lambda x: tf.sigmoid(core(x, training=False)), reduce_retracing=True)
+    size = [batch]
+
+    def predict(flat):
+        while True:
+            try:
+                return np.concatenate([np.asarray(call({k: v[s:s + size[0]] for k, v in flat.items()})).ravel()
+                                       for s in range(0, T * B, size[0])])
+            except tf.errors.ResourceExhaustedError:
+                if size[0] <= 64:
+                    raise
+                size[0] //= 2
+
     values = np.zeros((2 ** n, T))
     channels = targets[0]["physics"].shape[-1]
     for mask in range(2 ** n):
@@ -142,9 +186,7 @@ def coalition_values(core, cfg, targets, background, players, batch=4096):
                 mixed[key] = np.broadcast_to(src, (T, B) + t_view[key].shape[1:])
             mixed["physics"] = np.where(keep_phys, t_view["physics"][:, None], b_view["physics"][None])
             flat = {k: np.ascontiguousarray(v.reshape((T * B,) + v.shape[2:]), dtype=np.float32) for k, v in mixed.items()}
-            p = np.concatenate([np.asarray(call({k: v[s:s + batch] for k, v in flat.items()})).ravel()
-                                for s in range(0, T * B, batch)])
-            probs.append(p.reshape(T, B))
+            probs.append(predict(flat).reshape(T, B))
         p = probs[0] if not cfg.get("rc_view", True) else 0.5 * (probs[0] + probs[1])
         values[mask] = p.mean(1)
     return values
@@ -327,7 +369,7 @@ def _players(df):
 def _importance(ax, df, order, show_folds=True):
     """Horizontal bars of mean |SHAP| (all sequences) with one dot per outer fold; returns the y positions."""
     y = np.arange(len(order))
-    ax.barh(y, df[order].abs().mean().to_numpy(), height=0.6, color=BLUE, edgecolor="white", linewidth=1)
+    ax.barh(y, df[order].abs().mean().to_numpy(), height=0.6, color=SHAP_BLUE, edgecolor="white", linewidth=1)
     if show_folds:
         for fold, d in df.groupby("fold"):
             ax.scatter(d[order].abs().mean().to_numpy(), y, s=9, color=INK, zorder=3,
@@ -497,7 +539,7 @@ def _fig_interactions(w, fold_dirs):
     mean_abs, mean = np.abs(inter).mean(0), inter.mean(0)
     fig, ax = plt.subplots(figsize=(4.8, 3.9), layout="constrained")
     shown = np.where(np.eye(len(names), dtype=bool), np.nan, mean_abs)
-    im = ax.imshow(shown, cmap=plt.cm.Blues, vmin=0)
+    im = ax.imshow(shown, cmap=SEQUENTIAL, vmin=0)
     for i in range(len(names)):
         for j in range(len(names)):
             if i != j:
@@ -524,8 +566,8 @@ def _fig_agreement(w, shap_modality, ig):
     s_share, i_share = s_share / s_share.sum(), i_share / i_share.sum()
     fig, ax = plt.subplots(figsize=(4.6, 2.6), layout="constrained")
     x = np.arange(len(names))
-    ax.bar(x - 0.18, 100 * s_share, width=0.36, color=BLUE, label="Group Shapley (probability)")
-    ax.bar(x + 0.18, 100 * i_share, width=0.36, color=MUTED, label="Integrated gradients (logit)")
+    ax.bar(x - 0.18, 100 * s_share, width=0.36, color=SHAP_BLUE, label="Group Shapley (probability)")
+    ax.bar(x + 0.18, 100 * i_share, width=0.36, color=SHAP_PINK, label="Integrated gradients (logit)")
     for xi, a, b in zip(x, s_share, i_share):
         ax.text(xi - 0.18, 100 * a, f"{100 * a:.0f}", ha="center", va="bottom", fontsize=6.5, color=INK2)
         ax.text(xi + 0.18, 100 * b, f"{100 * b:.0f}", ha="center", va="bottom", fontsize=6.5, color=INK2)
@@ -585,13 +627,13 @@ def _fig_ig(w, ig):
     fig, ax = plt.subplots(figsize=(6.8, 0.27 * len(names) + 1.3), layout="constrained")
     for r, (name, prof) in enumerate(zip(names, profiles)):
         pos = pos_seq if name == "Sequence" else pos_phys
-        ax.imshow((prof / prof.max())[None], aspect="auto", cmap=plt.cm.Blues, vmin=0, vmax=1,
+        ax.imshow((prof / prof.max())[None], aspect="auto", cmap=SEQUENTIAL, vmin=0, vmax=1,
                   extent=(pos[0] - 0.5, pos[-1] + 0.5, r + 0.45, r - 0.45))
     ax.set(ylim=(len(names) - 0.5, -0.5), yticks=range(len(names)), yticklabels=names,
            xlabel="Position relative to the dyad (bp)", xlim=(pos_seq[0] - 0.5, pos_seq[-1] + 0.5))
     ax.axvline(0, color=INK2, lw=0.6, ls=":")
     ax.tick_params(axis="y", length=0)
-    fig.colorbar(plt.cm.ScalarMappable(cmap=plt.cm.Blues), ax=ax, shrink=0.8, label="Mean |attribution| (row max = 1)")
+    fig.colorbar(plt.cm.ScalarMappable(cmap=SEQUENTIAL), ax=ax, shrink=0.8, label="Mean |attribution| (row max = 1)")
     rows = [dict(input=n, position=int(p), mean_abs_attribution=float(v))
             for n, prof in zip(names, profiles) for p, v in zip(pos_seq if n == "Sequence" else pos_phys, prof)]
     w.save(fig, "ig_position_heatmap", "Where along the 147 bp each input acts: mean absolute integrated-gradients "
@@ -611,7 +653,7 @@ def _fig_loadings(w, fold_dirs):
     cols = [f"PLS {j + 1}" for j in range(mean.shape[1])]
     fig, ax = plt.subplots(figsize=(4.4, 2.8), layout="constrained")
     lim = np.abs(mean).max()
-    im = ax.imshow(mean, cmap=DIVERGING, vmin=-lim, vmax=lim, aspect="auto")
+    im = ax.imshow(mean, cmap=SIGNED, vmin=-lim, vmax=lim, aspect="auto")
     for i in range(mean.shape[0]):
         for j in range(mean.shape[1]):
             ax.text(j, i, f"{mean[i, j]:.2f}", ha="center", va="center", fontsize=6.5,

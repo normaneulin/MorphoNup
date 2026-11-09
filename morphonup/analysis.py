@@ -33,8 +33,10 @@ from .figures import BLUE, INK, INK2, MUTED, GRID, Writer, _chance, _roc_pr, sty
 REFERENCE = "full"
 # per analysis: what a positive Δ = MorphoNup − variant means, and what every variant changes (captions, table notes)
 HELPS = dict(architecture="the removed or changed component helps",
-             modality="what the variant lacks, scrambles or preprocesses differently helps")
-CHANGES = dict(architecture="removes or changes one component", modality="changes the inputs or the shape preprocessing")
+             modality="what the variant lacks, scrambles or preprocesses differently helps",
+             candidates="MorphoNup is better than the candidate change")
+CHANGES = dict(architecture="removes or changes one component", modality="changes the inputs or the shape preprocessing",
+               candidates="adds one candidate change")
 HIGHER = ["accuracy", "balanced_accuracy", "sensitivity", "specificity", "precision", "f1", "mcc", "roc_auc", "pr_auc"]
 TABLE = HIGHER + ["nll", "brier"]                                          # nll, brier: lower is better
 DELTAS = [("accuracy", "Δ accuracy (pp)", 100), ("mcc", "Δ MCC", 1), ("roc_auc", "Δ ROC AUC", 1)]

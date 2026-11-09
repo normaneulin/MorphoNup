@@ -12,7 +12,8 @@ An input an arm no longer uses is joined with weight 0 (ZeroConnect), so every a
 import numpy as np
 import tensorflow as tf
 
-from .layers import (BoundedCorrection, ChannelSubset, ConnectedAnchor, DyadPool, GlobalPool, GroupedJointMotifs,
+from .layers import (BoundedCorrection, CenterCrop1D, ChannelSubset, ConnectedAnchor, DyadPool, GlobalPool,
+                     GroupedJointMotifs,
                      MotifSpectrum, MotifStatistics, PhysicalMoments, StatisticsByWord, ZeroConnect)
 
 L = tf.keras.layers
@@ -21,7 +22,8 @@ NETWORK = dict(sequence_motifs=True,     # PWM term of the motifs
                kmers=True,               # 1-4-mer composition branch
                motif_statistics=True,    # dimer/trimer statistics correction
                physical_adapter=True,    # physical adapter correction
-               dyad_bins=True)           # seven soft dyad bins in every DyadPool (False: mean + max only)
+               dyad_bins=True,           # seven soft dyad bins in every DyadPool (False: mean + max only)
+               motif_context=None)       # candidate: None | "conv" | "gru" | "conv_small" | "gru_small" context block
 
 
 def network_switches(cfg):
@@ -58,11 +60,37 @@ def build_core(cfg, channels, groups):
     net = network_switches(cfg)
     inputs = {"sequence": L.Input((147, 4), name="sequence"), "kmers": L.Input((cfg["kmer_dim"],), name="kmers"),
               "physics": L.Input((143, channels), name="physics")}
-    pools = []
+    pools, maps = [], []
     for k, count in cfg["motifs"]:
         matches = GroupedJointMotifs(k, count, groups, sequence=net["sequence_motifs"], physical=net["shape_attenuation"],
                                      name=f"motifs_{k}")([inputs["sequence"], inputs["physics"]])
         pools.append((DyadPool(name=f"dyad_pool_{k}") if net["dyad_bins"] else GlobalPool(name=f"global_pool_{k}"))(matches))
+        maps.append(matches)
+    if net["motif_context"]:
+        # candidate: model how motif matches combine along the sequence (as stacked conv/recurrent models do)
+        length = 148 - max(k for k, _ in cfg["motifs"])
+        x = L.Concatenate(name="motif_maps")([CenterCrop1D(length, name=f"crop_{k}")(m)
+                                              for (k, _), m in zip(cfg["motifs"], maps)])
+        if net["motif_context"] in ("conv", "gru"):       # first attempt: wide and unregularised (overfits)
+            x = L.Conv1D(64, 9, padding="same", activation="gelu", name="context_conv")(x)
+            x = L.MaxPool1D(2, name="context_pool")(x)
+            if net["motif_context"] == "gru":
+                x = L.Bidirectional(L.GRU(32, return_sequences=True), name="context_gru")(x)
+            else:
+                x = L.Conv1D(64, 5, padding="same", dilation_rate=2, activation="gelu", name="context_conv_2")(x)
+        elif net["motif_context"] in ("conv_small", "gru_small"):   # bottleneck to 32 channels + spatial dropout
+            x = L.Conv1D(32, 1, activation="gelu", name="context_bottleneck")(x)
+            x = L.Conv1D(32, 9, padding="same", activation="gelu", name="context_conv")(x)
+            x = L.SpatialDropout1D(0.25, name="context_dropout_1")(x)
+            x = L.MaxPool1D(2, name="context_pool")(x)
+            if net["motif_context"] == "gru_small":
+                x = L.Bidirectional(L.GRU(16, return_sequences=True), name="context_gru")(x)
+            else:
+                x = L.Conv1D(32, 5, padding="same", dilation_rate=2, activation="gelu", name="context_conv_2")(x)
+            x = L.SpatialDropout1D(0.25, name="context_dropout_2")(x)
+        else:
+            raise ValueError(f"unknown motif_context {net['motif_context']!r}")
+        pools.append((DyadPool(name="dyad_pool_context") if net["dyad_bins"] else GlobalPool(name="global_pool_context"))(x))
     if net["kmers"]:
         pools.append(L.Dense(32, activation="gelu", name="composition_embedding")(inputs["kmers"]))
     h = L.BatchNormalization(name="feature_normalization")(L.Concatenate(name="all_features")(pools))

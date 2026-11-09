@@ -157,9 +157,14 @@ class PhysicalReducer:
         return out
 
 
-def kmer_views(ds, fit):
-    """1-4-mer frequencies (340) of both strands, z-scored with fit-row statistics (forward + RC pooled)."""
+def kmer_views(ds, fit, strand_flag=False):
+    """1-4-mer frequencies (340) of both strands, z-scored with fit-row statistics (forward + RC pooled).
+    strand_flag (candidate arm): one more column, +1 on the given strand and -1 on its reverse complement, so the model
+    knows which orientation it is reading."""
     raw = [ds.arrays["kmers"][s] for s in (0, 1)]
     pool = np.concatenate([raw[0][fit], raw[1][fit]])
     mu, sd = pool.mean(0), np.maximum(pool.std(0), 1e-6)
-    return [((raw[s] - mu) / sd).astype(np.float32) for s in (0, 1)]
+    views = [((raw[s] - mu) / sd).astype(np.float32) for s in (0, 1)]
+    if strand_flag:
+        views = [np.concatenate([v, np.full((len(v), 1), 1.0 - 2.0 * s, np.float32)], axis=1) for s, v in enumerate(views)]
+    return views

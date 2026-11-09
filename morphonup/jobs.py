@@ -60,9 +60,9 @@ def _detach(commands, log):
     return log
 
 
-def _cv_args(dataset_id, k, seeds, arm, gpu_mb):
+def _cv_args(dataset_id, k, seeds, arm, gpu_mb, stages=None):
     args = ["python", "scripts/run_cv.py", "--dataset", dataset_id, "--k", str(k), "--seeds", *map(str, seeds), "--arm", arm]
-    return args + (["--gpu-mb", str(gpu_mb)] if gpu_mb else [])
+    return args + (["--gpu-mb", str(gpu_mb)] if gpu_mb else []) + (["--stages", *stages] if stages else [])
 
 
 def launch(dataset_id, k, seeds, arm="full", allow_busy_gpu=False, gpu_mb=None):

@@ -95,6 +95,24 @@ class GlobalPool(L.Layer):
 
 
 @register(package="MorphoNup")
+class CenterCrop1D(L.Layer):
+    """Keeps the central `length` positions (motif maps of different widths share one centre; candidate arm only)."""
+    def __init__(self, length, **kw):
+        super().__init__(**kw)
+        self.length = length
+
+    def call(self, x):
+        start = (tf.shape(x)[1] - self.length) // 2
+        return x[:, start:start + self.length]
+
+    def compute_output_shape(self, shape):
+        return (shape[0], self.length, shape[-1])
+
+    def get_config(self):
+        return {**super().get_config(), "length": self.length}
+
+
+@register(package="MorphoNup")
 class ZeroConnect(L.Layer):
     """Adds 0 x inputs an analysis arm does not use, so every arm keeps the same three-input contract."""
     def call(self, inputs):

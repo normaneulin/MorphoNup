@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--smoke", action="store_true", help="2-epoch pipeline check into a separate --results root")
     ap.add_argument("--gpu-mb", type=int, default=None, help="per-process GPU memory cap (default by dataset size)")
     ap.add_argument("--results", type=Path, default=config.RESULTS_ROOT)
+    ap.add_argument("--stages", nargs="+", choices=["base", "refit"], default=["base", "refit"],
+                    help="stages to train (refit alone needs the finished base stage)")
     args = ap.parse_args()
 
     import tensorflow as tf
@@ -43,7 +45,7 @@ def main():
     tf.config.threading.set_intra_op_parallelism_threads(4)
     tf.config.threading.set_inter_op_parallelism_threads(2)
     run(ds, args.dataset, args.k, args.seeds, folds=args.folds, arm=args.arm, root=args.results, smoke=args.smoke,
-        log=lambda m: print(m, flush=True))
+        log=lambda m: print(m, flush=True), stages=tuple(args.stages))
 
 
 if __name__ == "__main__":

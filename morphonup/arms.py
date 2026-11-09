@@ -56,6 +56,32 @@ ARMS = {
                       shape=dict(raw=True)),
     "no_ep": dict(group="modality", part="Shape preprocessing", label="w/o EP",
                   change="EP removed; MGW, Roll + PLS block kept", shape=dict(explicit=["MGW", "Roll"])),
+    # ---- candidates (2026-11-07): changes screened to close the C. elegans gap; one model must serve every dataset,
+    #      so a candidate is kept only if it also holds on H. sapiens
+    "wide_motifs": dict(group="candidates", part="Capacity", label="2x motif filters",
+                        change="twice the motif filters at every scale (128/96/64/48 instead of 64/48/32/24)",
+                        settings=dict(motifs=[[7, 128], [11, 96], [15, 64], [21, 48]])),
+    "context_conv": dict(group="candidates", part="Motif context", label="+ motif context (conv)",
+                         change="adds a context block over all motif maps: conv 9 bp -> pool 2 -> dilated conv 5 bp, dyad-pooled",
+                         network=dict(motif_context="conv")),
+    "context_gru": dict(group="candidates", part="Motif context", label="+ motif context (BiGRU)",
+                        change="adds a context block over all motif maps: conv 9 bp -> pool 2 -> bidirectional GRU (2x32), dyad-pooled",
+                        network=dict(motif_context="gru")),
+    "context_conv_small": dict(group="candidates", part="Motif context", label="+ small motif context (conv)",
+                               change="adds a regularised context block over all motif maps: 1x1 bottleneck to 32 -> conv 9 bp -> "
+                                      "spatial dropout 0.25 -> pool 2 -> dilated conv 5 bp -> spatial dropout 0.25, dyad-pooled",
+                               network=dict(motif_context="conv_small")),
+    "context_gru_small": dict(group="candidates", part="Motif context", label="+ small motif context (BiGRU)",
+                              change="adds a regularised context block over all motif maps: 1x1 bottleneck to 32 -> conv 9 bp -> "
+                                     "spatial dropout 0.25 -> pool 2 -> bidirectional GRU (2x16) -> spatial dropout 0.25, dyad-pooled",
+                              network=dict(motif_context="gru_small")),
+    "strand_flag": dict(group="candidates", part="Strand orientation", label="+ strand flag",
+                        change="RC view kept, but the k-mer input carries +1 on the given strand and -1 on its reverse "
+                               "complement, so strand-specific (orientation) signal can be used",
+                        settings=dict(strand_flag=True, kmer_dim=341)),
+    "long_patience": dict(group="candidates", part="Training schedule", label="Longer training",
+                          change="patience 48 epochs (24), LR-plateau patience 12 (8), cap 160 epochs (120)",
+                          settings=dict(patience=48, lr_patience=12, epochs=160)),
 }
 VIRTUAL = {
     "no_refit": dict(group="architecture", part="Training and inference", label="w/o refit", change="base run reported (fit rows only, no refit)",
@@ -64,9 +90,12 @@ VIRTUAL = {
 ARCHITECTURE = ["no_shape_attenuation", "three_scales", "global_pool", "no_kmer", "no_physical_adapter",
                 "no_motif_statistics", "head_dropout_035", "no_rc_view", "no_sam", "no_refit"]     # in model order, by part
 MODALITY = ["sequence_only", "shape_only", "shuffled_shape", "no_pls", "raw_shape", "no_ep"]
-GROUPS = dict(architecture=ARCHITECTURE, modality=MODALITY)
+CANDIDATES = ["wide_motifs", "context_conv", "context_gru", "context_conv_small", "context_gru_small", "strand_flag",
+              "long_patience"]
+GROUPS = dict(architecture=ARCHITECTURE, modality=MODALITY, candidates=CANDIDATES)
 PARTS = dict(architecture=["Motif module", "Branches and corrections", "Head", "Training and inference"],
-             modality=["Input set", "Shape preprocessing"])          # figure and table sections, top to bottom
+             modality=["Input set", "Shape preprocessing"],
+             candidates=["Capacity", "Motif context", "Strand orientation", "Training schedule"])          # figure and table sections, top to bottom
 
 
 def describe(arm):
