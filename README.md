@@ -7,6 +7,11 @@ This repository holds the model package (`morphonup/`), the notebooks, the run s
 12 benchmark datasets (as a zip archive in `dataset/`, unpacked as described in [section 3](#3-data)). Training writes
 every model, prediction, table and figure to `results/`, which is created on the first run.
 
+**Try it online:** [normaneulin.github.io/MorphoNup-Web](https://normaneulin.github.io/MorphoNup-Web/). Choose a
+species and a dataset, paste a 147-bp sequence (or pick one of the dataset), and see the prediction, the score of each
+strand and the DNA shape. The trained models of this repository run in the browser, so nothing is installed and the
+sequence is not sent anywhere. Code of the website: [MorphoNup-Web](https://github.com/normaneulin/MorphoNup-Web).
+
 **Contents**
 1. [Quick start](#1-quick-start)
 2. [The model](#2-the-model)
@@ -558,6 +563,7 @@ Run from this folder with the `tf` environment active. Long jobs: check `nvidia-
 | | options: `--folds 1 2` (subset), `--arm no_kmer` (analysis arm), `--gpu-mb 4096` (GPU memory cap; default 2,560 MB up to 20k sequences, else 10,000 MB), `--results <dir>` (other results root), `--smoke` (2-epoch pipeline check; refuses the real results folder) | |
 | `scripts/run_explain.py` | explain the saved models of one seed | `python scripts/run_explain.py --dataset DatasetNup_1/Homo_sapiens --k 5 --seed 151000` |
 | | options: `--folds`, `--targets 200`, `--background 50`, `--steps 32`, `--stage base`, `--figures-only` | |
+| `scripts/run_queue.py` | run a queue of datasets / k / seeds with N parallel jobs; the queue file is re-read before every start and the runner waits while another user's process is on the GPU | `setsid nohup python scripts/run_queue.py results/logs/benchmark_queue.tsv --parallel 2 >> results/logs/queue.log 2>&1 &` |
 | `scripts/rebuild_figures.py` | redraw every figure and summary table from saved files (CPU, no training) | `python scripts/rebuild_figures.py --dataset DatasetNup_1/Homo_sapiens --k 5` |
 
 Lists: `python -c "from morphonup import config; print(*config.DATASETS, sep='\n')"` (dataset IDs),
@@ -756,6 +762,20 @@ Feature attribution only: how much each input contributes. Motif and sequence-pa
 
 These describe what the model uses; they are associations, not causal claims. Runtime ≈ 1–2 h on the GPU for one seed
 (5 folds) with the default budget (200 targets, 50 background, 2,048 coalitions).
+
+---
+
+### 9.4 Candidate changes and the *C. elegans* strand analysis
+
+`morphonup/arms.py` also defines a `candidates` group, screened on DatasetNup_1/Caenorhabditis_elegans (k = 5) to find
+out why MorphoNup is lower there than on *H. sapiens*: `wide_motifs` (2× motif filters), `context_conv` /
+`context_gru` and their regularised `_small` versions (a context block over all motif maps; network switch
+`motif_context`), `strand_flag` (the k-mer input carries +1 on the given strand and −1 on its reverse complement;
+setting `strand_flag`) and `long_patience`. Their switches are off in MorphoNup, whose graph and saved weights are
+unchanged (inference parity on all 50 HS k = 5 fold-stages). The result: the gap comes from a strand-specific
+signature in how the benchmark's *C. elegans* nucleosomal sequences were extracted, which strand-aware models can
+learn and the strand-symmetric MorphoNup does not; the final model is unchanged. Write-up: `reports/FINDINGS.md`;
+CPU diagnostics in `reports/ce_gap/` (local).
 
 ---
 
